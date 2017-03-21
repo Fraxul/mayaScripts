@@ -1,0 +1,82 @@
+// alignPivotToSelection Tool for Maya 2010, 2011 & 2012
+// Author: Daniel Brkovic
+// Thanks to: Tom Ferstl
+// Date: 10-12-2011
+//
+// Descritption: 
+//		You can align the pivot along a selected normal which can be defined by vertices, edges or a face.
+// Commands: 
+//		alignPivotToSelection(0),alignPivotToSelection(1)
+// Installation: 
+// 		1. 	Copy alignPivotToSelection.mel to C:\Users\[USER]\Documents\maya\[MAYAVERSION]\scripts
+// 		2. 	Restart maya
+// Instructions: 
+// 		1. 	Select at least 3 vertices(best), 2 edges or 1 face. 
+// 		2. 	Run alignPivotToSelection(0) to affect rotations only and alignPivotToSelection(1) for rotation and translation.
+// 			Note: Best results with 3 vertices, triangle or quad face selected.
+
+global proc alignPivotToSelection( int $option )
+{
+	if ($option == 0)
+	{
+		ConvertSelectionToVertices;
+		string $vtxSel[] = `ls -sl -fl`;
+		string $selectedObjectStore[] = `ls -sl -o`;
+		$objectSelectionStore = `listRelatives -p $selectedObjectStore[0]`;
+
+		if (size($vtxSel) < 3)
+			error "Please select at least 3 Vertices, 2 Edges or 1 Face";
+
+		// create and align helperPlane
+		string $plane[] = `polyPlane -w 1 -h 1 -sx 1 -sy 1 -ax 0 1 0 -cuv 2 -ch 1 -n rotationPlane`;
+
+		select ( $plane[0] + ".vtx[0:2]") $vtxSel[0] $vtxSel[1] $vtxSel[2];
+		snap3PointsTo3Points(0);
+	
+		// parent object to helperPlane
+		parent $objectSelectionStore $plane[0];
+
+		// freeze transformations on object    
+		makeIdentity -apply true -t 0 -r 1 -s 0 -n 0 $objectSelectionStore;
+    
+		// unparent object
+		parent -world $objectSelectionStore;
+
+		// cleanup
+		delete $plane;
+	}
+    
+	else if ($option == 1)
+	{
+		setToolTo Move;
+		float $getPivotPos[] = `manipMoveContext -q -p Move`;  
+		ConvertSelectionToVertices;
+		string $vtxSel[] = `ls -sl -fl`;
+		string $selectedObjectStore[] = `ls -sl -o`;
+		$objectSelectionStore = `listRelatives -p $selectedObjectStore[0]`;
+
+		if (size($vtxSel) < 3)
+			error "Please select at least 3 Vertices, 2 Edges or 1 Face";
+
+		// create and align helperPlane
+		string $plane[] = `polyPlane -w 1 -h 1 -sx 1 -sy 1 -ax 0 1 0 -cuv 2 -ch 1 -n rotationPlane`;
+
+		select ( $plane[0] + ".vtx[0:2]") $vtxSel[0] $vtxSel[1] $vtxSel[2];
+		snap3PointsTo3Points(0);
+
+		// parent object to helperPlane
+		parent $objectSelectionStore $plane[0];
+
+		// freeze transformations on object
+		makeIdentity -apply true -t 0 -r 1 -s 0 -n 0 $objectSelectionStore;
+
+		// move pivot
+		xform -ws -piv $getPivotPos[0] $getPivotPos[1] $getPivotPos[2];
+
+		// unparent object
+		parent -world $objectSelectionStore;
+
+		// cleanup
+		delete $plane;
+	}
+}

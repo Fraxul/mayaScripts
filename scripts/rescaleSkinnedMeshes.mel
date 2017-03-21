@@ -1,0 +1,81 @@
+// Cook a scale factor into a skeleton and its skinned mesh(es).
+// Select one or more meshes and the root joint of the skeleton; the scale
+// factor is function argument.
+// Will also cook any translation/rotation of the root joint of the input
+// skeleton into the output, so rotate the root joint first if you also need
+// to correct the orientation of the input meshes.
+// Does not preserve any other deformers (like blend shapes).
+
+global proc rescaleSkinnedMeshes(float $scale) {
+  string $selArr[];
+  
+  // Enumerate selected mesh-transforms and root of skeleton
+  $selArr = `ls -sl -type joint`;
+  string $origSkelRoot = $selArr[0];
+  select -d $origSkelRoot;
+  string $meshes[] = `ls -sl -tr`;
+  
+  // Duplicate skeleton
+  $selArr = `duplicate -rr $origSkelRoot`;
+  string $newSkelRoot = $selArr[0];
+  
+  // Rescale duplicate skeleton
+  select -r -hi $newSkelRoot;
+  for ($node in `ls -sl -type joint`) {
+    scale -pcp 1 1 1 $node; // Reset scale to unity on new joints
+    setAttr ($node + ".tx") (`getAttr ($node + ".tx")` * $scale);
+    setAttr ($node + ".ty") (`getAttr ($node + ".ty")` * $scale);
+    setAttr ($node + ".tz") (`getAttr ($node + ".tz")` * $scale);
+    setAttr ($node + ".radius") (`getAttr ($node + ".radius")` * $scale);
+  }
+  
+  // Scale original skeleton in prep for mesh duplication
+  string $origSkelGroup = `group $origSkelRoot`;
+  scale -p 0 0 0 $scale $scale $scale $origSkelGroup;
+  
+  // Rename root of new skeleton to match name of root of old skeleton.
+  // (Should work now because old skeleton is in a group -- no name conflicts)
+  $sns = stringToStringArray($origSkelRoot, "|" );
+  $sn = $sns[size($sns) -1];
+  $newSkelRoot = `rename $newSkelRoot $sn`;
+  
+  for ($mesh in $meshes) {
+    // Create duplicate for binding
+    $selArr = `duplicate $mesh`;
+    string $newMeshXf = $selArr[0];
+    delete -ch $newMeshXf; // ensure history is gone
+  
+    // Clean up extra intermediate nodes left behind by duplicating a skinned mesh
+    delete `ls -io -dag $newMeshXf`;
+  
+    // Unlock and zero mesh transform
+    setAttr -l off ($newMeshXf + ".translateX");
+    setAttr -l off ($newMeshXf + ".translateY");
+    setAttr -l off ($newMeshXf + ".translateZ");
+    setAttr -l off ($newMeshXf + ".rotateX");
+    setAttr -l off ($newMeshXf + ".rotateY");
+    setAttr -l off ($newMeshXf + ".rotateZ");
+    setAttr -l off ($newMeshXf + ".scaleX");
+    setAttr -l off ($newMeshXf + ".scaleY");
+    setAttr -l off ($newMeshXf + ".scaleZ");
+    makeIdentity -apply true -t 1 -r 1 -s 1 -n 0 -pn 1 $newMeshXf;
+  
+    // Bind new geometry to new skeleton
+    $selArr = `ls -dag -g $newMeshXf`;
+    $newMesh = $selArr[0];
+    select -r $newSkelRoot $newMesh;
+    print `ls -sl`;
+    $selArr = `skinCluster -bm 1 -mi 4 -nw 1 -omi true -sm 1`;
+    $destSkinCluster = $selArr[0];
+    print ($destSkinCluster + "\n");
+    
+    // Find source skin cluster
+    $selArr = `ls -dag -g $mesh`;
+    $selArr = `listConnections -type skinCluster $selArr`;
+    $sourceSkinCluster = $selArr[0];
+  
+    // Transfer weights from old skin
+    copySkinWeights -noMirror -sa closestComponent -ia oneToOne -ia name -ia closestBone -ss $sourceSkinCluster -ds $destSkinCluster;
+  }
+}
+
