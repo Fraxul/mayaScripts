@@ -77,5 +77,8 @@ global proc rescaleSkinnedMeshes(float $scale) {
     // Transfer weights from old skin
     copySkinWeights -noMirror -sa closestComponent -ia name -ia closestBone -ss $sourceSkinCluster -ds $destSkinCluster;
   }
+
+  // Group all originals so they're easier to get rid of (after validation)
+  group -world -name "rescaleSkinnedMeshes_originals" $meshes $origSkelGroup;
 }
 
