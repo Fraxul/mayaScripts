@@ -23,10 +23,20 @@ global proc rescaleSkinnedMeshes(float $scale) {
   select -r -hi $newSkelRoot;
   for ($node in `ls -sl -type joint`) {
     scale -pcp 1 1 1 $node; // Reset scale to unity on new joints
-    setAttr ($node + ".tx") (`getAttr ($node + ".tx")` * $scale);
-    setAttr ($node + ".ty") (`getAttr ($node + ".ty")` * $scale);
-    setAttr ($node + ".tz") (`getAttr ($node + ".tz")` * $scale);
+    $worldTx = `xform -q -ws -translation $node`;
+    move -pcp -absolute -worldSpace ($worldTx[0] * $scale) ($worldTx[1] * $scale) ($worldTx[2] * $scale) $node;
+
     setAttr ($node + ".radius") (`getAttr ($node + ".radius")` * $scale);
+  }
+  // Rescale any non-joint transform children of the duplicate skeleton
+  // (This covers things like meshes parented into the skeleton hierarchy)
+  select -r -hi $newSkelRoot;
+  select -d `ls -sl -type joint`;
+  string $transforms[] = `ls -sl -type transform`;
+  if (size($transforms) > 0) {
+    for ($node in $transforms) {
+      scale -pcp -relative -ws -pivot 0 0 0 $scale $scale $scale $node;
+    }
   }
   
   // Scale original skeleton in prep for mesh duplication
@@ -64,17 +74,26 @@ global proc rescaleSkinnedMeshes(float $scale) {
     $selArr = `ls -dag -g $newMeshXf`;
     $newMesh = $selArr[0];
     select -r $newSkelRoot $newMesh;
-    print `ls -sl`;
     $selArr = `skinCluster -bm 1 -mi 4 -nw 1 -omi true -sm 1`;
     $destSkinCluster = $selArr[0];
-    print ($destSkinCluster + "\n");
     
     // Find source skin cluster
     $selArr = `ls -dag -g $mesh`;
     $selArr = `listConnections -type skinCluster $selArr`;
+    if (size($selArr) == 0) {
+      // Slightly more indirect approach, this will end up selecting it through the deformer set
+      $selArr = `ls -dag -g $mesh`;
+      $selArr = `listConnections -type objectSet $selArr`;
+      $selArr = `listConnections -type skinCluster $selArr`;
+    }
+    if (size($selArr) == 0) {
+      warning ("Couldn't find a skinCluster for input mesh " + $mesh + " -- weights were not transferred.");
+      continue;
+    }
     $sourceSkinCluster = $selArr[0];
   
     // Transfer weights from old skin
+    print ("copySkinWeights: " + $mesh + " : " + $sourceSkinCluster + " -> " + $newMesh + " : " + $destSkinCluster + "\n");
     copySkinWeights -noMirror -sa closestComponent -ia name -ia closestBone -ss $sourceSkinCluster -ds $destSkinCluster;
   }
 
