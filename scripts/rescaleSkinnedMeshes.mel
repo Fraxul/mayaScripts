@@ -8,6 +8,8 @@
 
 global proc rescaleSkinnedMeshes(float $scale) {
   string $selArr[];
+  string $hist[];
+  string $blendNodes[];
   
   // Enumerate selected mesh-transforms and root of skeleton
   $selArr = `ls -sl -type joint`;
@@ -21,8 +23,26 @@ global proc rescaleSkinnedMeshes(float $scale) {
   
   // Rescale duplicate skeleton
   select -r -hi $newSkelRoot;
-  for ($node in `ls -sl -type joint`) {
-    scale -pcp 1 1 1 $node; // Reset scale to unity on new joints
+  string $newSkelJoints[] = `ls -sl -type joint`;
+  for ($node in $newSkelJoints) {
+    // This would be the simple solution, but it kills joint orientation on children:
+    // scale -pcp 1 1 1 $node; // Reset scale to unity on new joints
+
+    // Try to reset joint scale while preserving position
+    // TODO: messy, definitely breaks in edge cases
+
+    vector $localSx = `xform -q -relative -scale $node`;
+    vector $scaleDelta = abs($localSx - <<1.0, 1.0, 1.0>>);
+    if (($scaleDelta.x + $scaleDelta.y + $scaleDelta.z) > 0.001) {
+      print("Fixing non-identity scale transform " + $localSx + " on joint " + $node + "\n");
+      string $children[] = `listRelatives -children -allDescendents -fullPath -type transform $node`;
+      xform -scale 1 1 1 $node;
+      for ($child in $children) {
+        vector $t = `xform -q -translation $child`;
+        xform -translation ($t.x * $localSx.x) ($t.y * $localSx.y) ($t.z * $localSx.z) $child;
+      }
+    }
+
     $worldTx = `xform -q -ws -translation $node`;
     move -pcp -absolute -worldSpace ($worldTx[0] * $scale) ($worldTx[1] * $scale) ($worldTx[2] * $scale) $node;
 
@@ -69,7 +89,72 @@ global proc rescaleSkinnedMeshes(float $scale) {
     setAttr -l off ($newMeshXf + ".scaleY");
     setAttr -l off ($newMeshXf + ".scaleZ");
     makeIdentity -apply true -t 1 -r 1 -s 1 -n 0 -pn 1 $newMeshXf;
-  
+
+    // Check for and copy blend shapes
+    $hist = `listHistory $mesh`;
+    $blendNodes = `ls -type blendShape $hist`;
+    if (size($blendNodes) > 0) {
+      for ($blendNode in `ls -type blendShape $hist`) {
+
+          $targetNames = `blendShape -q -target $blendNode`;
+          $weightArrayLen = `getAttr -size ($blendNode + ".weight")`;
+          $targetGroup = `group -empty -world -name ($blendNode + "_targets")`;
+          setAttr ($targetGroup + ".visibility") 0;
+
+          $blendCmd = "blendShape ";
+
+          // `blendShape -edit -weight` expects indicies numbered as physical connection-indices to the weight array,
+          // not the (compacted) logical target indices exposed elsewhere. We can perform the remap by doing a lookup
+          // on this targetDirectory array.
+
+          $targetDirectory = `getAttr ($blendNode + ".targetDirectory[0].childIndices")`;
+
+          for ($targetIdx = 0; $targetIdx < size($targetNames); $targetIdx++) {
+              $currentTargetName = $targetNames[$targetIdx];
+
+              // Zero out all blend target weights
+              // TODO: This'll break if there are connections to the blend shape weights.
+              for ($weightIdx = 0; $weightIdx < size($targetNames); $weightIdx += 1) {
+                  blendShape -edit -weight $targetDirectory[$weightIdx] 0 $blendNode;
+              }
+              // Full weight on the relevant target only
+              blendShape -edit -weight $targetDirectory[$targetIdx] 1 $blendNode;
+
+              // Duplicate the output result
+
+              string $selArr[] = `duplicate -rr $mesh`;
+              string $newMeshXf = $selArr[0];
+              delete -ch $newMeshXf; // ensure history is gone
+
+              // Unlock and zero mesh transform
+              setAttr -l off ($newMeshXf + ".translateX");
+              setAttr -l off ($newMeshXf + ".translateY");
+              setAttr -l off ($newMeshXf + ".translateZ");
+              setAttr -l off ($newMeshXf + ".rotateX");
+              setAttr -l off ($newMeshXf + ".rotateY");
+              setAttr -l off ($newMeshXf + ".rotateZ");
+              setAttr -l off ($newMeshXf + ".scaleX");
+              setAttr -l off ($newMeshXf + ".scaleY");
+              setAttr -l off ($newMeshXf + ".scaleZ");
+              makeIdentity -apply true -t 1 -r 1 -s 1 -n 0 -pn 1 $newMeshXf;
+
+              // Move it to the targets group, and try and use the target name
+              parent $newMeshXf $targetGroup;
+              $newMeshXf = `rename $newMeshXf $currentTargetName`;
+
+              $blendCmd += $newMeshXf + " ";
+          } // Shape target loop
+          // Make sure to leave all blend target weights at zero
+          for ($weightIdx = 0; $weightIdx < size($targetNames); $weightIdx += 1) {
+              blendShape -edit -weight $targetDirectory[$weightIdx] 0 $blendNode;
+          }
+
+          // Create the replacement blendshape node
+          $blendCmd += $newMeshXf;
+          $newBlendShapeNode = evalEcho($blendCmd);
+      } // Blend node loop
+    }
+
     // Bind new geometry to new skeleton
     $selArr = `ls -dag -g $newMeshXf`;
     $newMesh = $selArr[0];
@@ -98,6 +183,7 @@ global proc rescaleSkinnedMeshes(float $scale) {
   }
 
   // Group all originals so they're easier to get rid of (after validation)
-  group -world -name "rescaleSkinnedMeshes_originals" $meshes $origSkelGroup;
+  $originals = `group -world -name "rescaleSkinnedMeshes_originals" $meshes $origSkelGroup`;
+  setAttr ($originals + ".visibility") 0;
 }
 
