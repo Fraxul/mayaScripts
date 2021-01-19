@@ -1,0 +1,37 @@
+global proc blendShapeCreateSculptTarget() {
+  string $selArr[];
+  string $hist[];
+  string $blendNodes[];
+  
+  string $meshes[] = `ls -sl -tr`;
+  if (size($meshes) != 1) {
+    error("Must select a single mesh.\n");
+    return;
+  }
+  string $mesh = $meshes[0];
+
+  // Check for and copy blend shapes
+  $hist = `listHistory $mesh`;
+  $blendNodes = `ls -type blendShape $hist`;
+  if (size($blendNodes) != 1) {
+    error("Mesh must have exactly one blendShape node in its history: " + $mesh + "\n");
+    return;
+  }
+  string $blendNode = $blendNodes[0];
+
+  // Create duplicate for sculpting
+  $selArr = `duplicate $mesh`;
+  string $newMeshXf = $selArr[0];
+  delete -ch $newMeshXf; // ensure history is gone
+
+  // Clean up extra intermediate nodes left behind by duplicating a skinned mesh
+  delete `ls -io -dag $newMeshXf`;
+
+  // Give the sculpt target a useful name
+  $newMeshXf = `rename $newMeshXf ($mesh + "_sculpt")`;
+
+  // Add this object as a new target at the end of the weight list
+  $weightCount = `blendShape -q -wc $blendNode`;
+  blendShape -edit -t $mesh $weightCount $newMeshXf 1 $blendNode;
+}
+

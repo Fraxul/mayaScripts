@@ -1,0 +1,149 @@
+global proc blendShapeRebase() {
+  string $selArr[];
+  string $hist[];
+  string $blendNodes[];
+  
+  // Enumerate selected mesh-transforms and root of skeleton
+  $selArr = `ls -sl -type joint`;
+  if (size($selArr) == 0) {
+    error("Must select skeleton root.\n");
+    return;
+  }
+
+  string $origSkelRoot = $selArr[0];
+  select -d $origSkelRoot;
+  string $meshes[] = `ls -sl -tr`;
+  if (size($meshes) == 0) {
+    error("Must select a mesh.\n");
+    return;
+  }
+
+  
+  for ($mesh in $meshes) {
+    // Check for and copy blend shapes
+    $hist = `listHistory $mesh`;
+    $blendNodes = `ls -type blendShape $hist`;
+    if (size($blendNodes) != 1) {
+      error("Mesh must have exactly one blendShape node in its history: " + $mesh + "\n");
+      return;
+    }
+
+    // Create duplicate for binding
+    $selArr = `duplicate $mesh`;
+    string $newMeshXf = $selArr[0];
+    delete -ch $newMeshXf; // ensure history is gone
+  
+    // Clean up extra intermediate nodes left behind by duplicating a skinned mesh
+    delete `ls -io -dag $newMeshXf`;
+  
+    // Unlock and zero mesh transform
+    setAttr -l off ($newMeshXf + ".translateX");
+    setAttr -l off ($newMeshXf + ".translateY");
+    setAttr -l off ($newMeshXf + ".translateZ");
+    setAttr -l off ($newMeshXf + ".rotateX");
+    setAttr -l off ($newMeshXf + ".rotateY");
+    setAttr -l off ($newMeshXf + ".rotateZ");
+    setAttr -l off ($newMeshXf + ".scaleX");
+    setAttr -l off ($newMeshXf + ".scaleY");
+    setAttr -l off ($newMeshXf + ".scaleZ");
+    makeIdentity -apply true -t 1 -r 1 -s 1 -n 0 -pn 1 $newMeshXf;
+
+    for ($blendNode in $blendNodes) {
+        $targetNames = `blendShape -q -target $blendNode`;
+        $targetGroup = `group -empty -world -name ($newMeshXf + "_" + $blendNode + "_targets")`;
+        setAttr ($targetGroup + ".visibility") 0;
+
+        // Snapshot current weights for rebase operation
+        $rebaseWeights = `blendShape -q -weight $blendNode`;
+
+        $blendCmd = "blendShape ";
+
+        // `blendShape -edit -weight` expects indicies numbered as physical connection-indices to the weight array,
+        // not the (compacted) logical target indices exposed elsewhere. We can perform the remap by doing a lookup
+        // on this targetDirectory array.
+
+        $targetDirectory = `getAttr ($blendNode + ".targetDirectory[0].childIndices")`;
+
+        for ($targetIdx = 0; $targetIdx < size($targetNames); $targetIdx++) {
+            $currentTargetName = $targetNames[$targetIdx];
+
+            print ("Shape " + $currentTargetName + " => " + $targetIdx + "\n");
+            if ($rebaseWeights[$targetIdx] != 0.0) {
+              print(" -- Has non-zero value, will be consumed by the rebase operation\n");
+              continue;
+            }
+
+            // Reset all blend target weights to the initial rebase state
+            // TODO: This'll break if there are connections to the blend shape weights.
+            for ($weightIdx = 0; $weightIdx < size($rebaseWeights); $weightIdx += 1) {
+                blendShape -edit -weight $targetDirectory[$weightIdx] $rebaseWeights[$weightIdx] $blendNode;
+            }
+            // Full weight on the relevant target
+            blendShape -edit -weight $targetDirectory[$targetIdx] 1 $blendNode;
+
+            // Duplicate the output result
+
+            string $selArr[] = `duplicate -rr $mesh`;
+            string $newMeshXf = $selArr[0];
+            delete -ch $newMeshXf; // ensure history is gone
+
+            // Unlock and zero mesh transform
+            setAttr -l off ($newMeshXf + ".translateX");
+            setAttr -l off ($newMeshXf + ".translateY");
+            setAttr -l off ($newMeshXf + ".translateZ");
+            setAttr -l off ($newMeshXf + ".rotateX");
+            setAttr -l off ($newMeshXf + ".rotateY");
+            setAttr -l off ($newMeshXf + ".rotateZ");
+            setAttr -l off ($newMeshXf + ".scaleX");
+            setAttr -l off ($newMeshXf + ".scaleY");
+            setAttr -l off ($newMeshXf + ".scaleZ");
+            makeIdentity -apply true -t 1 -r 1 -s 1 -n 0 -pn 1 $newMeshXf;
+
+            // Move it to the targets group, and try and use the target name
+            parent $newMeshXf $targetGroup;
+            $newMeshXf = `rename $newMeshXf $currentTargetName`;
+
+            $blendCmd += $newMeshXf + " ";
+        } // Shape target loop
+        // Reset the original shape back to the initial rebase weights
+        for ($weightIdx = 0; $weightIdx < size($rebaseWeights); $weightIdx += 1) {
+            blendShape -edit -weight $targetDirectory[$weightIdx] $rebaseWeights[$weightIdx] $blendNode;
+        }
+
+        // Create the replacement blendshape node
+        $blendCmd += $newMeshXf;
+        $newBlendShapeNode = evalEcho($blendCmd);
+    }
+
+    // Bind new geometry to new skeleton
+    $selArr = `ls -dag -g $newMeshXf`;
+    $newMesh = $selArr[0];
+    select -r $origSkelRoot $newMesh;
+    $selArr = `skinCluster -bm 1 -mi 4 -nw 1 -omi true -sm 1`;
+    $destSkinCluster = $selArr[0];
+    
+    // Find source skin cluster
+    $selArr = `ls -dag -g $mesh`;
+    $selArr = `listConnections -type skinCluster $selArr`;
+    if (size($selArr) == 0) {
+      // Slightly more indirect approach, this will end up selecting it through the deformer set
+      $selArr = `ls -dag -g $mesh`;
+      $selArr = `listConnections -type objectSet $selArr`;
+      $selArr = `listConnections -type skinCluster $selArr`;
+    }
+    if (size($selArr) == 0) {
+      warning ("Couldn't find a skinCluster for input mesh " + $mesh + " -- weights were not transferred.");
+      continue;
+    }
+    $sourceSkinCluster = $selArr[0];
+  
+    // Transfer weights from old skin
+    print ("copySkinWeights: " + $mesh + " : " + $sourceSkinCluster + " -> " + $newMesh + " : " + $destSkinCluster + "\n");
+    copySkinWeights -noMirror -sa closestComponent -ia name -ia closestBone -ss $sourceSkinCluster -ds $destSkinCluster;
+  }
+
+  // Group all originals so they're easier to get rid of (after validation)
+  $originals = `group -world -name "blendShapeRebase_originals" $meshes`;
+  setAttr ($originals + ".visibility") 0;
+}
+
