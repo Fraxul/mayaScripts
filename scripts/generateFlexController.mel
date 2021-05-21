@@ -1,0 +1,43 @@
+global proc generateFlexController() {
+
+  string $allTargetNames[];
+  string $blendNodes[];
+
+  $blendNodes = `ls -type blendShape`;
+
+  for ($blendNode in $blendNodes) {
+    $aliasNames  = `aliasAttr -q $blendNode`;
+    for ($aliasIdx = 0; $aliasIdx < size($aliasNames); $aliasIdx += 2) {
+      // $conn = `listConnections -p true -s true ($blendNode + "." + $aliasNames[$aliasIdx])`;
+      // if (size($conn)) {
+      //   disconnectAttr $conn[0] ($blendNode + "." + $aliasNames[$aliasIdx]);
+      // }
+      $allTargetNames[size($allTargetNames)] = $aliasNames[$aliasIdx];
+    }
+  }
+
+  $allTargetNames = sort(stringArrayRemoveDuplicates($allTargetNames));
+  print("Merged target list:\n");
+  for ($targetName in $allTargetNames) {
+    print("  " + $targetName + "\n");
+  }
+
+  // Create controller
+  $controllerTmp = `spaceLocator -p 0 0 0 -name "flexController"`;
+  $controller = $controllerTmp[0];
+
+  // Add target attributes
+  select -r $controller;
+  for ($targetName in $allTargetNames) {
+    addAttr -ci true -sn $targetName -ln $targetName -min 0 -max 1 -at "double";
+  }
+
+  // Link blend nodes to controller
+  for ($blendNode in $blendNodes) {
+    $aliasNames  = `aliasAttr -q $blendNode`;
+    for ($aliasIdx = 0; $aliasIdx < size($aliasNames); $aliasIdx += 2) {
+      connectAttr ($controller + "." + $aliasNames[$aliasIdx]) ($blendNode + "." + $aliasNames[$aliasIdx]);
+    }
+  }
+}
+

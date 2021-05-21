@@ -1,0 +1,165 @@
+proc resetBlendWeights(string $meshes[]) {
+  for ($mesh in $meshes) {
+    $hist = `listHistory $mesh`;
+    $blendNodes = `ls -type blendShape $hist`;
+
+    for ($blendNode in $blendNodes) {
+      $targetDirectory = `getAttr ($blendNode + ".targetDirectory[0].childIndices")`;
+
+      // Reset all blend target weights to the initial rebase state
+      for ($weightIdx = 0; $weightIdx < size($targetDirectory); $weightIdx += 1) {
+        blendShape -edit -weight $targetDirectory[$weightIdx] 0 $blendNode;
+      }
+    } // blendNode loop
+  }
+}
+
+proc string createMergedMesh(string $meshes[], string $targetName) {
+  string $mergeCommand = "polyUnite";
+
+  for ($mesh in $meshes) {
+    $hist = `listHistory $mesh`;
+    $blendNodes = `ls -type blendShape $hist`;
+
+    for ($blendNode in $blendNodes) {
+      $targetShapeNames = `blendShape -q -target $blendNode`;
+
+      // `blendShape -edit -weight` expects indicies numbered as physical connection-indices to the weight array,
+      // not the (compacted) logical target indices exposed elsewhere. We can perform the remap by doing a lookup
+      // on this targetDirectory array.
+
+      $targetDirectory = `getAttr ($blendNode + ".targetDirectory[0].childIndices")`;
+
+      // Reset all blend target weights to the initial rebase state
+      // TODO: This'll break if there are connections to the blend shape weights.
+      for ($weightIdx = 0; $weightIdx < size($targetDirectory); $weightIdx += 1) {
+        string $weightAlias = `aliasAttr -q ($blendNode + ".weight[" + $weightIdx + "]")`;
+        if (size($targetName) && $weightAlias == $targetName) {
+          blendShape -edit -weight $targetDirectory[$weightIdx] 1 $blendNode;
+        } else {
+          blendShape -edit -weight $targetDirectory[$weightIdx] 0 $blendNode;
+        }
+      }
+    } // blendNode loop
+
+    $selArr = `duplicate $mesh`;
+    string $newMeshXf = $selArr[0];
+    delete -ch $newMeshXf; // ensure history is gone
+  
+    // Clean up extra intermediate nodes left behind by duplicating a skinned mesh
+    delete `ls -io -dag $newMeshXf`;
+  
+    // Unlock and zero mesh transform
+    setAttr -l off ($newMeshXf + ".translateX");
+    setAttr -l off ($newMeshXf + ".translateY");
+    setAttr -l off ($newMeshXf + ".translateZ");
+    setAttr -l off ($newMeshXf + ".rotateX");
+    setAttr -l off ($newMeshXf + ".rotateY");
+    setAttr -l off ($newMeshXf + ".rotateZ");
+    setAttr -l off ($newMeshXf + ".scaleX");
+    setAttr -l off ($newMeshXf + ".scaleY");
+    setAttr -l off ($newMeshXf + ".scaleZ");
+    makeIdentity -apply true -t 1 -r 1 -s 1 -n 0 -pn 1 $newMeshXf;
+
+    $mergeCommand += " " + $newMeshXf;
+  }
+
+  $newMesh = evalEcho($mergeCommand);
+  delete -ch $newMesh; // ensure history is gone
+  return $newMesh[0];
+}
+
+global proc string blendShapeMerge() {
+  string $selArr[];
+  string $hist[];
+  string $blendNodes[];
+  
+  // Enumerate selected mesh-transforms and root of skeleton
+  $selArr = `ls -sl -type joint`;
+  if (size($selArr) != 1) {
+    error("Must select skeleton root.\n");
+    return "";
+  }
+
+  string $origSkelRoot = $selArr[0];
+  select -d $origSkelRoot;
+  string $meshes[] = `ls -sl -tr`;
+  if (size($meshes) == 0) {
+    error("Must select a mesh.\n");
+    return "";
+  }
+
+  string $allTargetNames[];
+  
+  for ($mesh in $meshes) {
+    // Check for and copy blend shapes
+    $hist = `listHistory $mesh`;
+    $blendNodes = `ls -type blendShape $hist`;
+    if (size($blendNodes) != 1) {
+      error("Mesh must have exactly one blendShape node in its history: " + $mesh + "\n");
+      return "";
+    }
+
+    $descendents = `listRelatives -children -fullPath -type transform $mesh`;
+    if (size($descendents)) {
+      error("Mesh " + $mesh + " has transform children which must be moved first.\n");
+      return "";
+    }
+
+    // Disconnect incoming connections to the blendShape nodes (will break shape target sampling)
+    for ($blendNode in $blendNodes) {
+      $aliasNames  = `aliasAttr -q $blendNode`;
+      for ($aliasIdx = 0; $aliasIdx < size($aliasNames); $aliasIdx += 2) {
+        $conn = `listConnections -p true -s true ($blendNode + "." + $aliasNames[$aliasIdx])`;
+        if (size($conn)) {
+          disconnectAttr $conn[0] ($blendNode + "." + $aliasNames[$aliasIdx]);
+        }
+        $allTargetNames[size($allTargetNames)] = $aliasNames[$aliasIdx];
+      }
+    }
+  }
+
+  $allTargetNames = sort(stringArrayRemoveDuplicates($allTargetNames));
+  print("Merged target list:\n");
+  for ($targetName in $allTargetNames) {
+    print("  " + $targetName + "\n");
+  }
+
+
+  // Create blend base
+  $newMeshXf = createMergedMesh($meshes, "");
+  $newMeshXf = rename($newMeshXf, "blendShapeMergedMesh");
+
+  // Create target meshes
+
+  $targetGroup = `group -empty -world -name "blendShapeMerge_targets"`;
+  setAttr ($targetGroup + ".visibility") 0;
+  $blendCmd = "blendShape ";
+  for ($targetName in $allTargetNames) {
+    $newTargetMesh = createMergedMesh($meshes, $targetName);
+    parent $newTargetMesh $targetGroup;
+    $newTargetMesh = rename($newTargetMesh,$targetName);
+    $blendCmd += $newTargetMesh + " ";
+  }
+
+  $blendCmd += $newMeshXf;
+  $newBlendShapeNode = evalEcho($blendCmd);
+
+  // Bind new geometry to new skeleton
+  $selArr = `ls -dag -g $newMeshXf`;
+  $newMesh = $selArr[0];
+  select -r $origSkelRoot $newMesh;
+  $selArr = `skinCluster -bm 1 -mi 4 -nw 1 -omi true -sm 1`;
+  $destSkinCluster = $selArr[0];
+
+  // Reset input meshes to base state before weight transfer
+  resetBlendWeights($meshes);
+
+  // Copy skin weights
+
+  select -r $meshes;
+  select -add $newMesh;
+  copySkinWeights  -noMirror -surfaceAssociation closestPoint -influenceAssociation name -influenceAssociation closestJoint;
+  return $newMesh;
+}
+
