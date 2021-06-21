@@ -1,0 +1,26 @@
+global proc unitizeScale(string $rootNode) {
+  $nodes = listRelatives("-allDescendents", "-noIntermediate", "-path", "-type", "transform", $rootNode);
+  // Include root node
+  $nodes[size($nodes)] = $rootNode;
+
+  // Save original transforms
+  vector $tx[];
+  for ($i = 0; $i < size($nodes); ++$i) {
+    vector $a = xform("-q", "-ws", "-t", $nodes[$i]);
+    //print($nodes[$i] + ": " + ($a.x) + " " + ($a.y) + " " + ($a.z) + "\n");
+    $tx[$i] = $a;
+  }
+
+  // Reset scale and shear on everything
+  for ($i = 0; $i < size($nodes); ++$i) {
+    xform -sh 0 0 0 $nodes[$i];
+    xform -s 1 1 1 $nodes[$i];
+  }
+
+  // Restore world-space positions
+  for ($i = 0; $i < size($nodes); ++$i) {
+    vector $a = $tx[$i];
+    move("-ws", "-pcp", "-absolute", ($a.x), ($a.y), ($a.z), $nodes[$i]);
+  }
+}
+
