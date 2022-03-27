@@ -87,6 +87,24 @@ global proc blendShapeRebase() {
             string $newMeshXf = $selArr[0];
             delete -ch $newMeshXf; // ensure history is gone
 
+            // Clean up extra intermediate nodes left behind by duplicating a skinned mesh
+            delete `ls -io -dag $newMeshXf`;
+
+            // Clean up set membership -- remove the target from any non-shading sets it inherited
+            string $sets[] = `listSets -o -extendToShape $newMeshXf`;
+            for ($set in $sets) {
+              if (`sets -q -renderable $set` != 0)
+                continue; // skip shading sets
+
+              sets -rm $set $newMeshXf;
+
+              // Cleanup any component members as well
+              sets -rm $set ($newMeshXf + ".f[*]"); // faces
+              sets -rm $set ($newMeshXf + ".vtx[*]"); // vertices
+              sets -rm $set ($newMeshXf + ".e[*]"); // edges
+              sets -rm $set ($newMeshXf + ".uv[*]"); // UVs
+            }
+
             // Unlock and zero mesh transform
             setAttr -l off ($newMeshXf + ".translateX");
             setAttr -l off ($newMeshXf + ".translateY");
