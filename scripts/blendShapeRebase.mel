@@ -24,9 +24,29 @@ global proc blendShapeRebase() {
     $hist = `listHistory $mesh`;
     $blendNodes = `ls -type blendShape $hist`;
     if (size($blendNodes) != 1) {
-      error("Mesh must have exactly one blendShape node in its history: " + $mesh + "\n");
+      $firstNode = $blendNodes[0];
+      warning("Mesh " + $mesh + " has more than one blendShape node in its history. Only the first node (" + $firstNode + ") will be used.\n");
+      clear $blendNodes;
+      $blendNodes[0] = $firstNode;
+    }
+
+    $descendents = `listRelatives -children -fullPath -type transform $mesh`;
+    if (size($descendents)) {
+      error("Mesh " + $mesh + " has transform children which must be moved first.\n");
       return;
     }
+
+    // Disconnect incoming connections to the blendShape nodes (will break shape target sampling)
+    for ($blendNode in $blendNodes) {
+      $aliasNames  = `aliasAttr -q $blendNode`;
+      for ($aliasIdx = 0; $aliasIdx < size($aliasNames); $aliasIdx += 2) {
+        $conn = `listConnections -p true -s true ($blendNode + "." + $aliasNames[$aliasIdx])`;
+        if (size($conn)) {
+          disconnectAttr $conn[0] ($blendNode + "." + $aliasNames[$aliasIdx]);
+        }
+      }
+    }
+
 
     // Create duplicate for binding
     $selArr = `duplicate $mesh`;
@@ -49,6 +69,17 @@ global proc blendShapeRebase() {
     makeIdentity -apply true -t 1 -r 1 -s 1 -n 0 -pn 1 $newMeshXf;
 
     for ($blendNode in $blendNodes) {
+
+        // Break incoming connections before manipulating weights
+        $aliasNames  = `aliasAttr -q $blendNode`;
+        for ($aliasIdx = 0; $aliasIdx < size($aliasNames); $aliasIdx += 2) {
+          $conn = `listConnections -p true -s true ($blendNode + "." + $aliasNames[$aliasIdx])`;
+          if (size($conn)) {
+            disconnectAttr $conn[0] ($blendNode + "." + $aliasNames[$aliasIdx]);
+          }
+        }
+
+
         $targetNames = `blendShape -q -target $blendNode`;
         $targetGroup = `group -empty -world -name ($newMeshXf + "_" + $blendNode + "_targets")`;
         setAttr ($targetGroup + ".visibility") 0;
@@ -65,7 +96,8 @@ global proc blendShapeRebase() {
         $targetDirectory = `getAttr ($blendNode + ".targetDirectory[0].childIndices")`;
 
         for ($targetIdx = 0; $targetIdx < size($targetNames); $targetIdx++) {
-            $currentTargetName = $targetNames[$targetIdx];
+            $currentTargetName = `aliasAttr -q ($blendNode + ".w[" + $targetDirectory[$targetIdx] + "]")`;
+            //$currentTargetName = $targetNames[$targetIdx];
 
             print ("Shape " + $currentTargetName + " => " + $targetIdx + "\n");
             if ($rebaseWeights[$targetIdx] != 0.0) {

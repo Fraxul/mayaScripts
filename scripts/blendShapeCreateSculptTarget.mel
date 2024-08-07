@@ -1,4 +1,4 @@
-global proc blendShapeCreateSculptTarget() {
+global proc blendShapeCreateSculptTarget(string $name) {
   string $selArr[];
   string $hist[];
   string $blendNodes[];
@@ -28,7 +28,10 @@ global proc blendShapeCreateSculptTarget() {
   delete `ls -io -dag $newMeshXf`;
 
   // Give the sculpt target a useful name
-  $newMeshXf = `rename $newMeshXf ($mesh + "_sculpt")`;
+  if (size($name) == 0) {
+    $name = ($mesh + "_sculpt");
+  }
+  $newMeshXf = rename($newMeshXf, $name);
 
   // Add this object as a new target at the end of the weight list
   $weightCount = `blendShape -q -wc $blendNode`;
