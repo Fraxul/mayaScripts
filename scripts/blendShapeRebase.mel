@@ -123,7 +123,7 @@ global proc blendShapeRebase() {
             delete `ls -io -dag $newMeshXf`;
 
             // Clean up set membership -- remove the target from any non-shading sets it inherited
-            string $sets[] = `listSets -o -extendToShape $newMeshXf`;
+            string $sets[] = `listSets -extendToShape -o $newMeshXf`;
             for ($set in $sets) {
               if (`sets -q -renderable $set` != 0)
                 continue; // skip shading sets
